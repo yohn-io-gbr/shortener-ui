@@ -35,7 +35,7 @@ cp secrets.toml.example .streamlit/secrets.toml
 8. Load recorded stats for that link for a range that includes today.
 9. Press Country once. An empty 404 is a valid "not configured" result. Do not press it again in that case.
 10. Delete the disposable link and confirm it disappears from the list.
-11. The app is published from [yohn-io-gbr/shortener-ui](https://github.com/yohn-io-gbr/shortener-ui). Confirm the deployed app still shows health 200 and that the repository contains no JWT.
+11. The published app is [shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app](https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/). Opening it redirects to Streamlit sign-in. Confirm health 200 after that, and confirm the repository contains no JWT.
 
 `pytest` does not open a socket and does not call the live Worker. The checklist above is the live check. Do not call `POST /api/v1/analytics/disable` except from the Emergency stop control, after confirming it.
 
@@ -47,11 +47,12 @@ The source is [yohn-io-gbr/shortener-ui](https://github.com/yohn-io-gbr/shortene
 
 ## Deployment
 
+The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/](https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/). Opening that URL redirects to Streamlit sign-in before the console loads. After sign-in, API calls still require an access JWT pasted on the Auth tab. Do not store the JWT as a secret.
+
 1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io) with the GitHub account that can see `yohn-io-gbr/shortener-ui`.
 2. Deploy branch `main` and main file `app.py`. Python is 3.12.
-3. This GitHub repository is public, so the Community Cloud app is public. Anyone can open the page. API calls still require an access JWT pasted on the Auth tab. Do not store the JWT as a secret.
-4. Optional secret: `SHORTENER_BASE_URL` set to the staging origin.
-5. The app sleeps when idle and wakes on the next visit. That is acceptable.
+3. Optional secret: `SHORTENER_BASE_URL` set to the staging origin.
+4. The app sleeps when idle and wakes on the next visit. That is acceptable.
 
 ## Out of scope
 
