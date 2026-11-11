@@ -1,2 +1,5 @@
 pytest==9.2.0
 respx==0.23.1
+playwright==1.65.0
+pytest-playwright==0.10.0
+pycognito==2024.5.1
