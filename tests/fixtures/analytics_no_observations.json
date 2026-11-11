@@ -1,0 +1,22 @@
+{
+  "source": "analytics_engine",
+  "countKind": "estimated",
+  "groupBy": "country",
+  "requestedPeriod": {
+    "start": "2026-11-04",
+    "end": "2026-11-12"
+  },
+  "coverage": {
+    "status": "unknown",
+    "deliveryCompleteness": "not_guaranteed",
+    "availablePeriods": [],
+    "gaps": []
+  },
+  "sampling": {
+    "possible": true,
+    "observed": null,
+    "missingGroupsPossible": true
+  },
+  "resultStatus": "no_observations",
+  "data": []
+}

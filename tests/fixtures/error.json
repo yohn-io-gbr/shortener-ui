@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "not_found",
+    "message": "Link not found",
+    "requestId": "req-test"
+  }
+}

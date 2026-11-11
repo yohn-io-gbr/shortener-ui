@@ -1,0 +1,17 @@
+{
+  "id": "link-test",
+  "tenantId": "stage-test-simple",
+  "domainId": "domain-test",
+  "slug": "slug-test",
+  "caseInsensitive": false,
+  "destinationUrl": "https://example.com/landing",
+  "status": "active",
+  "queryPolicy": {
+    "mode": "none",
+    "allowlist": []
+  },
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000001000,
+  "revision": 3,
+  "shortUrl": "https://example.com/r/slug-test"
+}
