@@ -14,7 +14,6 @@ from urllib.parse import urlsplit
 import streamlit as st
 
 from client import (
-    STAGING_BASE_URL,
     CallResult,
     ClientError,
     ShortenerClient,
@@ -34,7 +33,7 @@ _SUBJECT = re.compile(r"^[\x21-\x7e]{1,255}$")
 
 def init_state() -> None:
     if "base_url" not in st.session_state:
-        st.session_state.base_url = secret_base_url() or STAGING_BASE_URL
+        st.session_state.base_url = configured_origin() or ""
     st.session_state.setdefault("allow_other_origin", False)
     st.session_state.setdefault("tenant_id", "stage-test-simple")
     st.session_state.setdefault("access_token", "")
@@ -91,6 +90,23 @@ def sign_out() -> None:
     st.session_state.results = {}
 
 
+def configured_origin() -> str | None:
+    raw = secret_base_url()
+    if not raw:
+        return None
+    try:
+        return validate_base_url(raw, allow_other_origin=True)
+    except ClientError:
+        return None
+
+
+def allowed_host() -> str | None:
+    origin = configured_origin()
+    if not origin:
+        return None
+    return urlsplit(origin).hostname
+
+
 def secret_base_url() -> str | None:
     try:
         value = st.secrets["SHORTENER_BASE_URL"]
@@ -113,6 +129,7 @@ def make_client() -> ShortenerClient:
         access_token=st.session_state.access_token,
         allow_other_origin=bool(st.session_state.allow_other_origin),
         idempotency=st.session_state.idempotency,
+        allowed_host=allowed_host(),
     )
 
 
@@ -361,7 +378,11 @@ def render_sidebar() -> None:
     st.sidebar.button("Clear session", on_click=clear_session)
     st.sidebar.caption("Clear session deletes the access JWT and the last API responses.")
     try:
-        validate_base_url(st.session_state.base_url, bool(st.session_state.allow_other_origin))
+        validate_base_url(
+            st.session_state.base_url,
+            bool(st.session_state.allow_other_origin),
+            allowed_host(),
+        )
     except ClientError as exc:
         st.sidebar.warning(str(exc))
 

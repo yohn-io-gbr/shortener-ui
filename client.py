@@ -15,8 +15,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-STAGING_HOST = "yohn-shortener-stage.staging-yohn-aws.workers.dev"
-STAGING_BASE_URL = f"https://{STAGING_HOST}"
 DEFAULT_TENANT = "stage-test-simple"
 MAX_STATS_DAYS = 366
 
@@ -55,11 +53,11 @@ def require_id(value: str, label: str) -> str:
     return value
 
 
-def validate_base_url(url: str, allow_other_origin: bool = False) -> str:
+def validate_base_url(
+    url: str, allow_other_origin: bool = False, allowed_host: str | None = None
+) -> str:
     if not isinstance(url, str) or not url.strip():
-        raise ClientError(
-            "Base URL must be an https URL with no username, password, query, or fragment."
-        )
+        raise ClientError("Set SHORTENER_BASE_URL in Streamlit secrets.")
     parsed = urlsplit(url.strip())
     if parsed.username is not None or parsed.password is not None:
         raise ClientError("Base URL must not include a username or password.")
@@ -75,17 +73,17 @@ def validate_base_url(url: str, allow_other_origin: bool = False) -> str:
     if not host:
         raise ClientError("Base URL must include a host.")
     scheme = parsed.scheme.lower()
-    staging = scheme == "https" and host == STAGING_HOST
+    configured = scheme == "https" and allowed_host is not None and host == allowed_host
     local_http = scheme == "http" and host in {"localhost", "127.0.0.1"}
     other_https = scheme == "https"
-    if not (staging or (allow_other_origin and (local_http or other_https))):
+    if not (configured or (allow_other_origin and (local_http or other_https))):
         if scheme == "http":
             raise ClientError(
                 "http is allowed only for localhost or 127.0.0.1 when another origin is allowed."
             )
         if scheme == "https":
             raise ClientError(
-                "Base URL host must be the staging Worker unless another origin is allowed."
+                "Base URL host must be the configured origin unless another origin is allowed."
             )
         raise ClientError("Base URL must use https.")
     netloc = host if port is None else f"{host}:{port}"
@@ -268,8 +266,9 @@ class ShortenerClient:
         access_token: str,
         allow_other_origin: bool = False,
         idempotency: dict[str, Any] | None = None,
+        allowed_host: str | None = None,
     ) -> None:
-        self.base_url = validate_base_url(base_url, allow_other_origin)
+        self.base_url = validate_base_url(base_url, allow_other_origin, allowed_host)
         self.tenant_id = tenant_id
         self.access_token = access_token
         self.idempotency = idempotency if idempotency is not None else {}

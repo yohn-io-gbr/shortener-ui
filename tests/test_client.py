@@ -7,8 +7,6 @@ import httpx
 import pytest
 
 from client import (
-    STAGING_BASE_URL,
-    STAGING_HOST,
     ClientError,
     ShortenerClient,
     classify_analytics,
@@ -22,6 +20,8 @@ from client import (
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures"
+ORIGIN = "https://shortener.example"
+HOST = "shortener.example"
 
 
 def load(name: str):
@@ -30,7 +30,7 @@ def load(name: str):
 
 @pytest.fixture
 def client():
-    return ShortenerClient(STAGING_BASE_URL, "stage-test-simple", "token-test")
+    return ShortenerClient(ORIGIN, "stage-test-simple", "token-test", allowed_host=HOST)
 
 
 @pytest.fixture(autouse=True)
@@ -52,11 +52,11 @@ def test_padded_access_token_is_sent_without_becoming_a_connection_failure(respx
             },
         )
     )
-    blank = ShortenerClient(STAGING_BASE_URL, "stage-test-simple", " \n")
+    blank = ShortenerClient(ORIGIN, "stage-test-simple", " \n", allowed_host=HOST)
     with pytest.raises(ClientError):
         blank.list_links(limit=1)
     assert route.call_count == 0
-    padded = ShortenerClient(STAGING_BASE_URL, " stage-test-simple\n", "Bearer token-test \n")
+    padded = ShortenerClient(ORIGIN, " stage-test-simple\n", "Bearer token-test \n", allowed_host=HOST)
     result = padded.list_links(limit=1)
     assert result.transport_error is None
     assert result.status_code == 401
@@ -66,10 +66,10 @@ def test_padded_access_token_is_sent_without_becoming_a_connection_failure(respx
 
 
 def test_health_and_ready_omit_auth_headers(client, respx_mock):
-    health = respx_mock.get(f"{STAGING_BASE_URL}/health").mock(
+    health = respx_mock.get(f"{ORIGIN}/health").mock(
         return_value=httpx.Response(200, json={"status": "ok"})
     )
-    ready = respx_mock.get(f"{STAGING_BASE_URL}/ready").mock(
+    ready = respx_mock.get(f"{ORIGIN}/ready").mock(
         return_value=httpx.Response(200, json={"status": "ready"})
     )
     assert client.health().parsed == {"status": "ok"}
@@ -81,7 +81,7 @@ def test_health_and_ready_omit_auth_headers(client, respx_mock):
 
 
 def test_api_call_sends_bearer_and_tenant_and_does_not_follow_redirect(client, respx_mock):
-    route = respx_mock.get(f"{STAGING_BASE_URL}/api/v1/links/link-test").mock(
+    route = respx_mock.get(f"{ORIGIN}/api/v1/links/link-test").mock(
         return_value=httpx.Response(302, headers={"Location": "https://example.com/landing"})
     )
     result = client.get_link("link-test")
@@ -118,7 +118,7 @@ def test_idempotency_helper_reuses_key_until_the_body_changes():
 
 def test_create_reuses_key_and_body_after_timeout(client, respx_mock):
     link = load("link.json")
-    route = respx_mock.post(f"{STAGING_BASE_URL}/api/v1/links").mock(
+    route = respx_mock.post(f"{ORIGIN}/api/v1/links").mock(
         side_effect=[
             httpx.ReadTimeout("timed out"),
             httpx.Response(
@@ -154,7 +154,7 @@ def test_create_reuses_key_and_body_after_timeout(client, respx_mock):
 
 
 def test_connection_error_is_a_transport_failure(client, respx_mock):
-    respx_mock.get(f"{STAGING_BASE_URL}/health").mock(side_effect=httpx.ConnectError("failed"))
+    respx_mock.get(f"{ORIGIN}/health").mock(side_effect=httpx.ConnectError("failed"))
     result = client.health()
     assert result.transport_error == "connection"
     assert result.status_code is None
@@ -162,10 +162,10 @@ def test_connection_error_is_a_transport_failure(client, respx_mock):
 
 def test_patch_and_delete_send_quoted_if_match_and_omit_unchanged_fields(client, respx_mock):
     link = load("link.json")
-    patch = respx_mock.patch(f"{STAGING_BASE_URL}/api/v1/links/link-test").mock(
+    patch = respx_mock.patch(f"{ORIGIN}/api/v1/links/link-test").mock(
         return_value=httpx.Response(200, json=link, headers={"ETag": '"4"'})
     )
-    delete = respx_mock.delete(f"{STAGING_BASE_URL}/api/v1/links/link-test").mock(
+    delete = respx_mock.delete(f"{ORIGIN}/api/v1/links/link-test").mock(
         return_value=httpx.Response(204)
     )
     patched = client.patch_link("link-test", '"3"', {"destinationUrl": "https://example.com/new"})
@@ -184,7 +184,7 @@ def test_patch_and_delete_send_quoted_if_match_and_omit_unchanged_fields(client,
 
 def test_list_passes_cursor_only_when_supplied_and_omits_empty_filters(client, respx_mock):
     page = load("list.json")
-    route = respx_mock.get(f"{STAGING_BASE_URL}/api/v1/links").mock(
+    route = respx_mock.get(f"{ORIGIN}/api/v1/links").mock(
         return_value=httpx.Response(200, json=page)
     )
     result = client.list_links(domain_id="", status=None, search="", limit=50)
@@ -265,7 +265,7 @@ def test_no_observations_is_returned_as_a_report(client, respx_mock):
 
 def test_recorded_stats_returns_the_fixture_rows_only(client, respx_mock):
     body = load("stats.json")
-    route = respx_mock.get(f"{STAGING_BASE_URL}/api/v1/stats").mock(
+    route = respx_mock.get(f"{ORIGIN}/api/v1/stats").mock(
         return_value=httpx.Response(200, json=body)
     )
     result = client.tenant_stats("2026-11-04", "2026-11-12")
@@ -276,7 +276,7 @@ def test_recorded_stats_returns_the_fixture_rows_only(client, respx_mock):
         "end": "2026-11-12",
         "format": "json",
     }
-    csv_route = respx_mock.get(f"{STAGING_BASE_URL}/api/v1/links/link-test/stats").mock(
+    csv_route = respx_mock.get(f"{ORIGIN}/api/v1/links/link-test/stats").mock(
         return_value=httpx.Response(
             200,
             text="date,recorded\r\n2026-11-11,2\r\n",
@@ -290,7 +290,7 @@ def test_recorded_stats_returns_the_fixture_rows_only(client, respx_mock):
 
 
 def test_base_url_validation():
-    assert validate_base_url(STAGING_BASE_URL, False) == STAGING_BASE_URL
+    assert validate_base_url(ORIGIN, False, HOST) == ORIGIN
     assert validate_base_url("http://127.0.0.1:8787", True) == "http://127.0.0.1:8787"
     assert validate_base_url("http://localhost:8787", True) == "http://localhost:8787"
     with pytest.raises(ValueError):
@@ -298,13 +298,13 @@ def test_base_url_validation():
     with pytest.raises(ValueError):
         validate_base_url("http://example.com", True)
     with pytest.raises(ValueError):
-        validate_base_url("https://example.com", False)
+        validate_base_url("https://example.com", False, HOST)
     with pytest.raises(ValueError):
-        validate_base_url(f"https://user:pass@{STAGING_HOST}", False)
+        validate_base_url(f"https://user:pass@{HOST}", False, HOST)
     with pytest.raises(ValueError):
-        validate_base_url(f"https://user@{STAGING_HOST}/", True)
+        validate_base_url(f"https://user@{HOST}/", True, HOST)
     with pytest.raises(ValueError):
-        validate_base_url(f"{STAGING_BASE_URL}?token=nope", True)
+        validate_base_url(f"{ORIGIN}?token=nope", True, HOST)
 
 
 def test_client_does_not_request_a_public_slug():
@@ -329,6 +329,22 @@ def test_client_does_not_request_a_public_slug():
     guard_path("/health")
     guard_path("/ready")
     guard_path("/api/v1/links/link-test")
+
+
+def test_repository_does_not_publish_the_worker_origin():
+    banned = ("workers" + ".dev", "yohn-shortener-" + "stage")
+    paths = [
+        ROOT / "client.py",
+        ROOT / "app.py",
+        ROOT / "README.md",
+        ROOT / "secrets.toml.example",
+        ROOT / "tests" / "test_client.py",
+        ROOT / "tests" / "test_auth.py",
+    ]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for term in banned:
+            assert term not in text, path.name
 
 
 def test_credentials_match_requires_both_values():

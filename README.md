@@ -1,6 +1,6 @@
 # Staging shortener console
 
-Streamlit console for the staging shortener at `https://yohn-shortener-stage.staging-yohn-aws.workers.dev`. The app calls the Worker from Python. The browser does not call the Worker.
+Streamlit console for the staging shortener. The app calls the Worker from Python. The browser does not call the Worker. The Worker origin is `SHORTENER_BASE_URL` in Streamlit secrets and is not stored in this repository.
 
 This directory is a client. It does not belong in `yohn-aws`, and it must not be pushed to that repository. The shortener CI fingerprints its own workflow and source files.
 
@@ -51,7 +51,7 @@ The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/
 
 1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io) with the GitHub account that can see `yohn-io-gbr/shortener-ui`.
 2. Deploy branch `main` and main file `app.py`. Python is 3.12.
-3. In the app secrets editor, set `AUTH_USERNAME` and `AUTH_PASSWORD`. Optional: `SHORTENER_BASE_URL` set to the staging origin.
+3. In the app secrets editor, set `AUTH_USERNAME`, `AUTH_PASSWORD`, and `SHORTENER_BASE_URL`. Do not commit the Worker origin.
 4. The app sleeps when idle and wakes on the next visit. That is acceptable.
 
 ## Out of scope
