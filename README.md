@@ -6,7 +6,7 @@ This directory is a client. It does not belong in `yohn-aws`, and it must not be
 
 Python 3.12.
 
-The access JWT stays in the browser session. Do not put a JWT, Cognito password, Analytics Engine token, or smoke token in this tree, in `secrets.toml.example`, or in Streamlit secrets.
+The access JWT stays in the browser session. Do not put a JWT, Cognito password, Analytics Engine token, or smoke token in this tree, in `secrets.toml.example`, or in Streamlit secrets. The console password belongs only in Streamlit secrets as `AUTH_PASSWORD`.
 
 ## Local setup
 
@@ -16,7 +16,7 @@ From this directory:
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Optional base URL, and nothing else:
+Optional base URL, plus the console username and password:
 
 ```sh
 mkdir -p .streamlit
@@ -47,11 +47,11 @@ The source is [yohn-io-gbr/shortener-ui](https://github.com/yohn-io-gbr/shortene
 
 ## Deployment
 
-The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/](https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/). Opening that URL redirects to Streamlit sign-in before the console loads. After sign-in, API calls still require an access JWT pasted on the Auth tab. Do not store the JWT as a secret.
+The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/](https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/). Opening that URL redirects to Streamlit sign-in. The console then asks for `AUTH_USERNAME` and `AUTH_PASSWORD`. API calls still require an access JWT pasted on the Auth tab. Do not store the JWT as a secret.
 
 1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io) with the GitHub account that can see `yohn-io-gbr/shortener-ui`.
 2. Deploy branch `main` and main file `app.py`. Python is 3.12.
-3. Optional secret: `SHORTENER_BASE_URL` set to the staging origin.
+3. In the app secrets editor, set `AUTH_USERNAME` and `AUTH_PASSWORD`. Optional: `SHORTENER_BASE_URL` set to the staging origin.
 4. The app sleeps when idle and wakes on the next visit. That is acceptable.
 
 ## Out of scope

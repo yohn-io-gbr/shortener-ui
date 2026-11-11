@@ -19,6 +19,7 @@ from client import (
     ClientError,
     ShortenerClient,
     classify_analytics,
+    credentials_match,
     default_stats_range,
     error_object,
     lookup_idempotency_key,
@@ -49,6 +50,45 @@ def init_state() -> None:
     st.session_state.setdefault("selected_link", None)
     st.session_state.setdefault("selected_etag", None)
     st.session_state.setdefault("results", {})
+
+
+def basic_credentials() -> tuple[str, str] | None:
+    try:
+        username = st.secrets["AUTH_USERNAME"]
+        password = st.secrets["AUTH_PASSWORD"]
+    except Exception:
+        return None
+    if isinstance(username, str) and isinstance(password, str) and username and password:
+        return username, password
+    return None
+
+
+def require_basic_auth() -> bool:
+    if st.session_state.get("basic_auth_ok") is True:
+        st.session_state.basic_password = ""
+        return True
+    st.title("Staging shortener console")
+    expected = basic_credentials()
+    if expected is None:
+        st.error("Set AUTH_USERNAME and AUTH_PASSWORD in Streamlit secrets before using this app.")
+        return False
+    st.subheader("Sign in")
+    st.caption("This password only opens the console. The access JWT is still entered on the Auth tab.")
+    username = st.text_input("Username", key="basic_username")
+    password = st.text_input("Password", type="password", key="basic_password")
+    if st.button("Sign in"):
+        if credentials_match(username, password, expected[0], expected[1]):
+            st.session_state.basic_auth_ok = True
+            st.rerun()
+        st.error("Username or password is wrong.")
+    return False
+
+
+def sign_out() -> None:
+    st.session_state.basic_auth_ok = False
+    st.session_state.basic_password = ""
+    st.session_state.access_token = ""
+    st.session_state.results = {}
 
 
 def secret_base_url() -> str | None:
@@ -317,6 +357,7 @@ def render_sidebar() -> None:
         st.sidebar.success("Access JWT is set. Change it on the Auth tab.")
     else:
         st.sidebar.warning("Paste the access JWT on the Auth tab.")
+    st.sidebar.button("Sign out", on_click=sign_out)
     st.sidebar.button("Clear session", on_click=clear_session)
     st.sidebar.caption("Clear session deletes the access JWT and the last API responses.")
     try:
@@ -915,6 +956,8 @@ def render_member_result(result: CallResult) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Staging shortener console", layout="wide")
+    if not require_basic_auth():
+        return
     init_state()
     render_sidebar()
     st.title("Staging shortener console")

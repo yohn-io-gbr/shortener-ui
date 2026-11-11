@@ -12,6 +12,7 @@ from client import (
     ClientError,
     ShortenerClient,
     classify_analytics,
+    credentials_match,
     error_object,
     guard_path,
     resolve_idempotency,
@@ -328,3 +329,12 @@ def test_client_does_not_request_a_public_slug():
     guard_path("/health")
     guard_path("/ready")
     guard_path("/api/v1/links/link-test")
+
+
+def test_credentials_match_requires_both_values():
+    assert credentials_match("operator", "secret-value", "operator", "secret-value")
+    assert not credentials_match("operator", "wrong", "operator", "secret-value")
+    assert not credentials_match("other", "secret-value", "operator", "secret-value")
+    assert not credentials_match("", "secret-value", "operator", "secret-value")
+    assert not credentials_match("operator", "secret-value", "", "secret-value")
+    assert not credentials_match("operator", "secret-value", "operator", "")

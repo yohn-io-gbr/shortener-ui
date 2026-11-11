@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -196,6 +197,23 @@ def _limit(limit: int) -> int:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
         raise ClientError("limit must be an integer from 1 to 200.")
     return limit
+
+
+def credentials_match(
+    given_username: str,
+    given_password: str,
+    expected_username: str,
+    expected_password: str,
+) -> bool:
+    """Return whether both values match. Empty expected values never match."""
+    if not all(
+        isinstance(value, str) and value
+        for value in (given_username, given_password, expected_username, expected_password)
+    ):
+        return False
+    username_ok = hmac.compare_digest(given_username.encode(), expected_username.encode())
+    password_ok = hmac.compare_digest(given_password.encode(), expected_password.encode())
+    return username_ok and password_ok
 
 
 def normalize_access_token(token: str) -> str:
