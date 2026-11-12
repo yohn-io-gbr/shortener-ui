@@ -14,6 +14,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--live-cognito", action="store_true", default=False,
+        help="Generate a real Cognito JWT through the local UI using ignored local credentials.",
+    )
+
+
 @pytest.fixture(scope="session")
 def app_url(tmp_path_factory):
     workdir = tmp_path_factory.mktemp("streamlit-e2e")

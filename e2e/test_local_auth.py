@@ -1,13 +1,7 @@
 from pathlib import Path
-from contextlib import closing
 import re
 import tomllib
 
-import boto3
-from botocore import UNSIGNED
-from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
-from pycognito.aws_srp import AWSSRP
 import pytest
 from playwright.sync_api import Browser, Error, Page, WebSocket, expect
 from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
@@ -187,6 +181,8 @@ def _local_access_credentials() -> dict[str, str]:
             raise ValueError("Missing local test settings")
         if not re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-\d+", settings["cognito_region"]):
             raise ValueError("Invalid Cognito region")
+        if not isinstance(settings.get("cognito_client_secret", ""), str):
+            raise ValueError("Invalid Cognito client secret")
         return settings
     except (OSError, ValueError, KeyError, TypeError):
         raise pytest.fail.Exception(
@@ -195,94 +191,131 @@ def _local_access_credentials() -> dict[str, str]:
         ) from None
 
 
-def _generate_access_jwt(settings: dict[str, str]) -> str:
-    try:
-        # Cognito user login needs no AWS IAM credentials or metadata lookup.
-        with closing(boto3.client(
-            "cognito-idp",
-            region_name=settings["cognito_region"],
-            config=Config(
-                signature_version=UNSIGNED, connect_timeout=10, read_timeout=30,
-                retries={"max_attempts": 0},
-            ),
-        )) as client:
-            srp = AWSSRP(
-                username=settings["user"], password=settings["pass"],
-                pool_id=settings["cognito_user_pool_id"],
-                client_id=settings["cognito_client_id"], client=client,
-                client_secret=settings.get("cognito_client_secret") or None,
-            )
-            parameters = srp.get_auth_params()
-            result = client.initiate_auth(
-                AuthFlow="USER_SRP_AUTH", ClientId=settings["cognito_client_id"],
-                AuthParameters=parameters,
-            )
-            username = settings["user"]
-            if result.get("ChallengeName") == "PASSWORD_VERIFIER":
-                answers = srp.process_challenge(result["ChallengeParameters"], parameters)
-                username = answers["USERNAME"]
-                result = client.respond_to_auth_challenge(
-                    ClientId=settings["cognito_client_id"],
-                    ChallengeName="PASSWORD_VERIFIER", ChallengeResponses=answers,
-                    **({"Session": result["Session"]} if result.get("Session") else {}),
-                )
-            challenge = result.get("ChallengeName")
-            mfa_keys = {
-                "SMS_MFA": "SMS_MFA_CODE",
-                "SOFTWARE_TOKEN_MFA": "SOFTWARE_TOKEN_MFA_CODE",
-                "EMAIL_OTP": "EMAIL_OTP_CODE",
-            }
-            if challenge in mfa_keys:
-                code = settings.get("mfa_code")
-                if not code:
-                    raise pytest.fail.Exception(
-                        "Cognito requires MFA. Add the current mfa_code under [local_tests] "
-                        "in the ignored secrets file, then rerun immediately.", pytrace=False
-                    ) from None
-                answers = {"USERNAME": username, mfa_keys[challenge]: str(code)}
-                if settings.get("cognito_client_secret"):
-                    answers["SECRET_HASH"] = srp.get_secret_hash(
-                        username, settings["cognito_client_id"], settings["cognito_client_secret"]
-                    )
-                result = client.respond_to_auth_challenge(
-                    ClientId=settings["cognito_client_id"], ChallengeName=challenge,
-                    ChallengeResponses=answers, Session=result["Session"],
-                )
-            if result.get("ChallengeName"):
-                raise pytest.fail.Exception(
-                    "Cognito requires an additional account challenge that this test "
-                    "does not handle. Complete account setup before retrying.", pytrace=False
-                ) from None
-            token = result["AuthenticationResult"]["AccessToken"]
-            if not isinstance(token, str) or token.count(".") != 2:
-                raise ValueError("No access JWT returned")
-            return token
-    except ClientError as exc:
-        code = exc.response.get("Error", {}).get("Code")
-        allowed = {
-            "NotAuthorizedException", "InvalidParameterException", "UserNotFoundException",
-            "ResourceNotFoundException", "PasswordResetRequiredException",
-            "UserNotConfirmedException", "TooManyRequestsException", "CodeMismatchException",
-            "ExpiredCodeException",
-        }
-        safe_code = code if code in allowed else "AuthenticationError"
+def _fill_and_commit(page: Page, socket: WebSocket, label: str, value: str) -> None:
+    field = page.get_by_label(label, exact=True).and_(page.locator("input"))
+    if field.input_value() == value:
+        return  # Streamlit does not rerun when an unchanged input is committed.
+    field.fill(value)
+    with socket.expect_event("framereceived", predicate=_script_finished):
+        field.press("Enter")
+
+
+def _submit_cognito(page: Page, socket: WebSocket) -> None:
+    with socket.expect_event("framereceived", predicate=_script_finished, timeout=60000):
+        page.get_by_role("button", name="generate JWT", exact=True).click()
+    if page.get_by_text("Cannot reach Cognito. Check your network and AWS region.", exact=True).is_visible():
         raise pytest.fail.Exception(
-            f"Cognito {safe_code}. Check the local user/password, pool, client, and MFA settings.",
+            "Cognito is unreachable from the local application. Live authentication remains unverified.",
             pytrace=False,
-        ) from None
-    except (BotoCoreError, ValueError, KeyError, TypeError, IndexError) as exc:
-        raise pytest.fail.Exception(
-            f"Could not obtain a Cognito access JWT using SRP ({type(exc).__name__}). "
-            "Check local configuration and network access.", pytrace=False
         ) from None
 
 
 @pytest.fixture(scope="session")
-def cognito_auth():
-    """Obtain one in-memory access JWT, only when a test requests this fixture."""
+def cognito_ui(browser: Browser, pytestconfig):
+    """One real UI login shared by the UI regression and authenticated checks."""
+    if not pytestconfig.getoption("--live-cognito"):
+        pytest.skip("Live Cognito UI login requires --live-cognito and ignored [local_tests] credentials")
     settings = _local_access_credentials()
-    token = _generate_access_jwt(settings)
+    stage = "console sign-in"
+    try:
+        # A manual context has no pytest-plugin traces, screenshots, or videos.
+        with browser.new_context() as context:
+            page = context.new_page()
+            socket = _sign_in(page)
+            stage = "Cognito form input"
+            page.get_by_role("tab", name="Auth", exact=True).click()
+            for label, key in (
+                ("Tenant id", "tenant_id"), ("AWS region", "cognito_region"),
+                ("User pool ID", "cognito_user_pool_id"), ("App client ID", "cognito_client_id"),
+                ("Email / username", "user"), ("Cognito password", "pass"),
+                ("App client secret (optional)", "cognito_client_secret"),
+            ):
+                stage = f"Cognito form input: {label}"
+                _fill_and_commit(page, socket, label, settings.get(key, ""))
+            stage = "generate JWT through Cognito sign-in"
+            _submit_cognito(page, socket)
+            mfa = page.get_by_label("MFA code", exact=True).and_(page.locator("input"))
+            if mfa.is_visible():
+                stage = "MFA continuation through the UI"
+                expect(mfa).to_have_attribute("type", "password")
+                code = str(settings.get("mfa_code", ""))
+                if not re.fullmatch(r"\d{6}", code):
+                    raise pytest.fail.Exception(
+                        "Cognito requires MFA. Set a valid current mfa_code in ignored [local_tests] "
+                        "and rerun immediately. Live UI authentication remains unverified.", pytrace=False,
+                    ) from None
+                _fill_and_commit(page, socket, "MFA code", code)
+                _submit_cognito(page, socket)
+            stage = "generated JWT confirmation"
+            expect(page.get_by_text(
+                "Access JWT generated and filled for this browser session.", exact=True,
+            )).to_be_visible()
+            jwt = page.get_by_label("Access JWT", exact=True).and_(page.locator("input"))
+            expect(jwt).to_have_value(re.compile(r"^[^.]+\.[^.]+\.[^.]+$"))
+            # Keep the token in memory for the other authenticated checks.
+            token = jwt.input_value()
+            yield settings, token, page, socket
+    except (AssertionError, Error):
+        # Locator diagnostics may include passwords, codes, secrets, or tokens.
+        raise pytest.fail.Exception(f"Live Cognito UI check failed at {stage}", pytrace=False) from None
+
+
+@pytest.fixture(scope="session")
+def cognito_auth(cognito_ui):
+    """Reuse the JWT issued through the production form; never log in separately."""
+    settings, token, _, _ = cognito_ui
     return settings, token
+
+
+@pytest.mark.e2e
+def test_cognito_ui_generates_access_jwt(cognito_ui):
+    _, _, page, socket = cognito_ui
+    stage = "masked JWT and cleared sensitive inputs"
+    try:
+        jwt = page.get_by_label("Access JWT", exact=True).and_(page.locator("input"))
+        stage = "Access JWT masking"
+        expect(jwt).to_have_attribute("type", "password")
+        expect(jwt).not_to_have_value("")
+        for name in ("Cognito password", "App client secret (optional)"):
+            stage = f"cleared {name}"
+            field = page.get_by_label(name, exact=True).and_(page.locator("input"))
+            expect(field).to_have_attribute("type", "password")
+            expect(field).to_have_value("")
+        stage = "cleared MFA input and challenge"
+        expect(page.get_by_label("MFA code", exact=True)).to_have_count(0)
+        expect(page.get_by_role("button", name="Cancel Cognito sign-in", exact=True)).to_have_count(0)
+        stage = "missing-token warnings after generation"
+        expect(page.get_by_text(
+            "No access JWT yet. API calls stay blocked until you paste one.", exact=True,
+        )).to_be_hidden()
+        expect(page.get_by_text("Paste the access JWT on the Auth tab.", exact=True)).to_be_hidden()
+        for tab, warning in (
+            ("Session", "Paste the access JWT on the Auth tab before calling the API."),
+            ("Links", "Paste the access JWT on the Auth tab before listing links."),
+            ("Recorded stats", "Paste the access JWT on the Auth tab before loading stats."),
+            ("Sampled analytics", "Paste the access JWT on the Auth tab. Opening this tab does not call the API."),
+            ("Members", "Paste the access JWT on the Auth tab before adding a member."),
+        ):
+            page.get_by_role("tab", name=tab, exact=True).click()
+            expect(page.get_by_text(warning, exact=True)).to_be_hidden()
+        stage = "sign-out and cleared session after console re-entry"
+        page.get_by_role("button", name="Sign out", exact=True).click()
+        expect(page.get_by_label("Password", exact=True)).to_be_visible()
+        expect(page.get_by_role("tab", name="Auth", exact=True)).to_have_count(0)
+        # Re-enter the console in this context to prove the JWT did not survive.
+        _enter_local_credentials(page, socket)
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        expect(page.get_by_role("tab", name="Auth", exact=True)).to_be_visible()
+        expect(jwt).to_have_value("")
+        for name in ("Email / username", "Cognito password", "App client secret (optional)"):
+            expect(page.get_by_label(name, exact=True).and_(page.locator("input"))).to_have_value("")
+        expect(page.get_by_label("MFA code", exact=True)).to_have_count(0)
+        expect(page.get_by_text(
+            "No access JWT yet. API calls stay blocked until you paste one.", exact=True,
+        )).to_be_visible()
+        page.get_by_role("button", name="Sign out", exact=True).click()
+    except (AssertionError, Error):
+        raise pytest.fail.Exception(f"Live Cognito UI check failed at {stage}", pytrace=False) from None
 
 
 def _expect_recorded_stats_controls(page: Page) -> None:

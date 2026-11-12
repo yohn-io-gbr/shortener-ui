@@ -35,6 +35,7 @@ class LoginResult:
 MFA_CODES = {
     "SMS_MFA": "SMS_MFA_CODE",
     "SOFTWARE_TOKEN_MFA": "SOFTWARE_TOKEN_MFA_CODE",
+    "EMAIL_MFA": "EMAIL_MFA_CODE",
     "EMAIL_OTP": "EMAIL_OTP_CODE",
 }
 
@@ -65,13 +66,24 @@ def _provider_error(error: ClientError) -> CognitoAuthError:
     return CognitoAuthError(messages.get(code, "Cognito sign-in failed. Check the account and app client settings."))
 
 
+def _challenge_parameters(body: dict[str, Any]) -> dict[str, str]:
+    parameters = body.get("ChallengeParameters", {})
+    if not isinstance(parameters, dict):
+        raise CognitoAuthError("Cognito returned an unexpected challenge. Start sign-in again.")
+    return parameters
+
+
 def _result(body: dict[str, Any], region: str, client_id: str, username: str, secret: str) -> LoginResult:
+    if not isinstance(body, dict):
+        raise CognitoAuthError("Cognito returned an unexpected sign-in response. Start again.")
     challenge = body.get("ChallengeName")
     if challenge in MFA_CODES:
         session = body.get("Session")
         if not isinstance(session, str) or not session:
             raise CognitoAuthError("Cognito did not return an MFA session. Start sign-in again.")
-        canonical = body.get("ChallengeParameters", {}).get("USERNAME")
+        canonical = _challenge_parameters(body).get("USERNAME")
+        if canonical is not None and (not isinstance(canonical, str) or not canonical.strip()):
+            raise CognitoAuthError("Cognito returned an unexpected MFA username. Start sign-in again.")
         if isinstance(canonical, str) and canonical:
             username = canonical
         return LoginResult(challenge=MFAChallenge(region, client_id, username, challenge, session, secret))
@@ -108,9 +120,20 @@ def start_login(
             result = client.initiate_auth(
                 AuthFlow="USER_SRP_AUTH", ClientId=client_id, AuthParameters=parameters,
             )
+            if not isinstance(result, dict):
+                raise CognitoAuthError("Cognito returned an unexpected sign-in response. Start again.")
             if result.get("ChallengeName") == "PASSWORD_VERIFIER":
-                answers = srp.process_challenge(result["ChallengeParameters"], parameters)
-                username = answers["USERNAME"]
+                challenge = _challenge_parameters(result)
+                required = ("USER_ID_FOR_SRP", "SALT", "SRP_B", "SECRET_BLOCK")
+                if not all(isinstance(challenge.get(key), str) and challenge[key].strip() for key in required):
+                    raise CognitoAuthError("Cognito returned an incomplete password challenge. Start sign-in again.")
+                username = challenge["USER_ID_FOR_SRP"]
+                # pycognito otherwise falls back to the original login alias when
+                # Cognito omits USERNAME. The verifier and hash need the SRP user.
+                answers = srp.process_challenge({**challenge, "USERNAME": username}, parameters)
+                answers["USERNAME"] = username
+                if client_secret:
+                    answers["SECRET_HASH"] = AWSSRP.get_secret_hash(username, client_id, client_secret)
                 result = client.respond_to_auth_challenge(
                     ClientId=client_id, ChallengeName="PASSWORD_VERIFIER", ChallengeResponses=answers,
                     **({"Session": result["Session"]} if result.get("Session") else {}),

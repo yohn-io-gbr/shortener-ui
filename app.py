@@ -456,6 +456,10 @@ def generate_cognito_jwt() -> None:
     }
     clear_session()
     st.session_state.update(preserved)
+    # Keep explicit empty widget values after clearing state; otherwise the
+    # browser can restore its previous password/secret for these same widgets.
+    st.session_state.cognito_password = ""
+    st.session_state.cognito_client_secret = ""
     st.session_state.access_token = result.access_token
     st.session_state.cognito_notice = "Access JWT generated and filled for this browser session."
 

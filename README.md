@@ -64,7 +64,7 @@ drafts, responses, and idempotency keys from the previous API identity while
 preserving the console login, Tenant id, Base URL, and non-secret Cognito settings.
 You can still paste an access token manually.
 
-If Cognito requests SMS, authenticator, or email OTP MFA, enter the **MFA code**
+If Cognito requests SMS, authenticator, email MFA, or email OTP, enter the **MFA code**
 that appears and select **generate JWT** again. This completes the existing sign-in
 session rather than starting another password login. **Cancel Cognito sign-in**
 discards the pending challenge. Password-change/setup and other account challenges
@@ -80,7 +80,7 @@ from the local test credentials.
 
 ## Tests
 
-The suite currently collects **84 tests: 71 unit/UI workflow tests and 13 Chromium browser
+The suite currently collects **110 tests: 96 unit/UI workflow tests and 14 Chromium browser
 cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 
 ### Coverage
@@ -90,7 +90,7 @@ cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 | `tests/test_auth.py` | 2 | Missing console credentials, wrong password, successful sign-in, six tabs, sign-out | None |
 | `tests/test_client.py` | 17 | Token cleanup, auth/tenant headers, health/readiness headers, redirects, idempotency and retries, revisions, pagination, date validation, recorded stats and analytics responses, URL/path validation, credential comparison, unpublished Worker origin | None; HTTP is mocked |
 | `tests/test_console_flows.py` | 28 | Credential clearing and blocked requests; session isolation; input errors; filters/pagination; Lookup and loaded details; totals, daily/empty stats, permissions and CSV contents; health/readiness success UI | None; synthetic credentials and strictly mocked HTTP |
-| `tests/test_cognito_auth.py` | 16 | SRP/session handling, access-token selection, configuration validation, MFA codes and secret hashes, safe provider/network errors, unsupported/incomplete responses | None; SDK calls are stubbed |
+| `tests/test_cognito_auth.py` | 41 | Canonical SRP username with email aliases, verifier/MFA secret hashes, all four MFA types, original-session retries, access-token selection, configuration validation, malformed challenges and safe errors | None; SDK calls are stubbed |
 | `tests/test_cognito_form.py` | 8 | Required-field gating, masked inputs, no login while typing, automatic JWT fill, cache reset, safe failure, MFA completion/retry/cancel and session clearing | None; Cognito sign-in is mocked |
 | `e2e/test_availability.py` | 1 | `http://localhost:8501/` returns HTTP 200 and shows the console heading | Local app only |
 | `e2e/test_browser_auth.py` | 1 | Rejects a wrong password, accepts temporary test credentials, shows all six tabs, signs out | Isolated local app only |
@@ -100,7 +100,8 @@ cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 | `e2e/test_local_auth.py`: Recorded stats | 2 | All eight controls visible/enabled; warning visible without a JWT and hidden after Auth is filled | Local app; JWT case also calls Cognito |
 | `e2e/test_local_auth.py`: Sampled analytics | 2 | Both expanders open; date fields, scope options, Country/Referrer buttons and confirmation checkbox enabled; checkbox unchecked and Disable analytics disabled; warning hidden after Auth is filled | Local app; JWT case also calls Cognito |
 | `e2e/test_local_auth.py`: Members | 2 | Tenant-admin guidance; issuer/subject inputs, editor/viewer role options and Add member button visible/enabled; editor selected by default; warning hidden after Auth is filled | Local app; JWT case also calls Cognito |
-| `e2e/test_local_auth.py`: Auth and List | 1 | Generates an access JWT, fills Tenant id and Access JWT, hides Auth/Links warnings, verifies List controls, clicks List and expects HTTP 200 | Cognito and Worker `GET /api/v1/links` |
+| `e2e/test_local_auth.py`: Cognito UI | 1 | Fills the real sign-in form, clicks generate JWT, completes MFA when required, checks masked JWT, cleared sensitive fields, missing-token warnings and sign-out/session clearing | Cognito; requires `--live-cognito` |
+| `e2e/test_local_auth.py`: Auth and List | 1 | Reuses the UI-generated access JWT, fills Tenant id and Access JWT, hides Auth/Links warnings, verifies List controls, clicks List and expects HTTP 200 | Cognito and Worker `GET /api/v1/links` |
 
 Recorded stats controls: **start**, **end**, **Link id**, **Tenant stats**,
 **Download tenant CSV**, **Use selected link**, **Link stats**, **Download link CSV**.
@@ -177,16 +178,23 @@ cognito_client_id = "your-cognito-app-client-id"
 # mfa_code = "current-code-only-if-Cognito-requests-MFA"
 ```
 
-Cognito login uses `USER_SRP_AUTH`. A lazily requested, session-scoped `cognito_auth`
-fixture loads local credentials and generates one access JWT shared by the four
-authenticated cases in a pytest process. Local-only cases never request the fixture
-or contact Cognito. Each test still uses a separate browser context, and the shared
-credentials/token remain in memory without recording authenticated browser artifacts.
-SMS, authenticator, and email MFA challenges use the optional current `mfa_code`;
-one MFA challenge may still be required per pytest session. Remove the code after
-use. Starting a new pytest process (or another parallel worker) performs a new login;
-an unusually long run may outlive the shared token. Account-setup challenges such
-as a forced password change are not handled.
+Live Cognito tests require the explicit `--live-cognito` option. Without it,
+the new UI test and four existing authenticated cases are skipped. A session-scoped
+`cognito_ui` fixture fills the production sign-in form in a fresh browser context
+and clicks **generate JWT**, exercising `generate_cognito_jwt()` and `USER_SRP_AUTH`.
+The `cognito_auth` fixture reuses that in-memory access JWT for the other four cases;
+it performs no separate SDK login and has no duplicated MFA mapping. Local-only
+cases never request these fixtures or contact Cognito.
+
+The UI test checks JWT masking, password/client-secret cleanup, MFA-input removal,
+warning removal on every tab, and sign-out followed by console re-entry in the
+same Streamlit session with an empty JWT. SMS, authenticator, email MFA, and email
+OTP use the optional current `mfa_code`. If Cognito requests MFA without an available
+code, the live test fails with a safe configuration message. Remove the code after
+use. Each pytest process (or parallel worker) performs one login; an unusually long
+run may outlive its token. Forced password changes and other account-setup
+challenges are not handled. Browser contexts containing credentials never record
+traces, screenshots, or video.
 
 Date-control checks target Streamlit's `stDateInput` widgets and their visible,
 enabled `spinbutton` segments. Both date-widget counts and start/end labels are
@@ -217,7 +225,7 @@ pytest tests/test_console_flows.py
 pytest e2e/test_browser_auth.py --browser chromium
 
 # Local UI checks without Cognito or Worker requests; running app required.
-pytest e2e --browser chromium -k 'not generated_access_jwt and not check_health'
+pytest e2e --browser chromium -k 'not generated_access_jwt and not cognito_ui and not check_health'
 
 # Focused local app checks.
 pytest e2e/test_availability.py
@@ -226,10 +234,13 @@ pytest e2e/test_local_auth.py -k recorded_stats
 pytest e2e/test_local_auth.py -k sampled_analytics
 pytest e2e/test_local_auth.py -k members
 pytest e2e/test_local_auth.py -k check_health
-pytest e2e/test_local_auth.py -k generated_access_jwt
+pytest e2e/test_local_auth.py -k generated_access_jwt --live-cognito
 
-# All browser cases, including Cognito and Worker requests.
-pytest e2e --browser chromium
+# Actual Cognito sign-in through the production UI, without Worker requests.
+pytest e2e/test_local_auth.py -k cognito_ui_generates_access_jwt --browser chromium --live-cognito
+
+# All browser cases, including one shared Cognito UI login and Worker reads.
+pytest e2e --browser chromium --live-cognito
 
 # Collect all tests without executing them.
 pytest tests e2e --collect-only -q
@@ -242,16 +253,41 @@ attempts both requests even if health returns an error.
 
 ### Results, limits, and artifacts
 
-Latest Auth-form validation (2026-11-12): **71 unit/mocked UI tests passed** and
-**8 local-only browser cases passed** (including the synthetic case). The 24 new
-mocked tests cover the Cognito helper and form, including automatic token filling,
-MFA, safe failures, and secret/session cleanup. The **4 existing authenticated
-cases failed before their JWT-dependent assertions** because the Cognito endpoint
-was unreachable. Their live JWT-dependent behavior remains unverified in this run.
-The remaining health/readiness case failed with Worker connection errors. All 84
-cases still collect successfully; no test cases were removed. The earlier P1/P2
-audit confirmed no Cognito access for local-only tests and one shared login attempt
-for the four authenticated cases.
+Latest verification (2026-11-12), with the local app running and Chromium:
+
+| Exact command | Result |
+| --- | --- |
+| `.venv/bin/pytest -q` | 96 passed |
+| `.venv/bin/pytest tests/test_cognito_auth.py tests/test_cognito_form.py -q` | 49 passed |
+| `.venv/bin/pytest tests e2e --collect-only -q` | 110 collected |
+| `.venv/bin/pytest e2e/test_browser_auth.py --browser chromium` | 1 passed |
+| `.venv/bin/pytest e2e/test_local_auth.py -k cognito_ui_generates_access_jwt --browser chromium --live-cognito` | 1 passed, 11 deselected |
+| `.venv/bin/pytest e2e --browser chromium` | 8 passed, 1 failed, 5 skipped |
+| `.venv/bin/pytest e2e --browser chromium --live-cognito` | 12 passed, 2 failed |
+
+The baseline before these fixes was 71 passing unit/UI tests and 84 collected
+cases. Regression tests now exercise the real SRP library with stubbed Cognito,
+including distinct alias/canonical usernames, app-client secrets, all four MFA
+code mappings, original-session retries, malformed responses, and safe errors.
+
+Real Cognito UI JWT generation, masking, warning removal, sensitive-field cleanup,
+and sign-out/session clearing passed. The browser test caught a password-restoration
+bug after clearing Streamlit state; the app now explicitly resets password and
+client-secret widget values after successful JWT generation. The live account did
+not request MFA and had no configured client secret, so those branches are covered
+by offline tests rather than a live provider challenge in this run.
+
+Both remaining full-suite failures are Worker connection failures: health/readiness
+and `GET /api/v1/links`. All authenticated UI warning/control checks passed using
+one shared UI-issued JWT in the full run. The PR is **not ready for unconditional
+approval** until the Worker is reachable and these checks pass. No CI statuses or
+pull-request workflow runs were returned for the current remote head. These fixes
+are local changes on the existing `playwright` branch; the PR has not been merged.
+
+Chromium initially could not launch inside the macOS sandbox; browser verification
+passed its launch stage after an approved run outside the sandbox. The final diff
+and local artifacts/logs were checked for configured secrets and token-shaped
+values; no secrets or recordings were found.
 
 A successful browser UI check confirms visibility, enabled state, or warning
 behavior; it does not establish that a statistics or analytics API request succeeds.
@@ -262,8 +298,7 @@ covered. No tests create/update/delete real links, add real members, or disable 
 Health/readiness and List are live response checks. They fail on DNS/connection
 errors, unexpected status codes, or unexpected health/readiness bodies. They do
 not substitute mock responses. For `Transport failure (connection)`, check DNS,
-network access, and the configured `SHORTENER_BASE_URL`. Cognito DNS failures
-prevent JWT generation before the UI warning checks can run. The last observed
+network access, and the configured `SHORTENER_BASE_URL`. The last observed
 health/readiness and List runs failed with connection errors; retry them after
 fixing the Worker connection rather than treating UI passes as API passes.
 
