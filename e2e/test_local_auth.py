@@ -62,6 +62,19 @@ def _check_local_login(browser: Browser) -> None:
     with browser.new_context() as context:
         page = context.new_page()
         _sign_in(page)
+        panel = page.get_by_role("tabpanel")
+        for name in (
+            "AWS region", "User pool ID", "App client ID", "Email / username",
+            "Cognito password", "App client secret (optional)",
+        ):
+            field = panel.get_by_label(name, exact=True).and_(page.locator("input"))
+            expect(field).to_be_visible()
+            expect(field).to_be_enabled()
+        for name in ("Cognito password", "App client secret (optional)"):
+            expect(panel.get_by_label(name, exact=True)).to_have_attribute("type", "password")
+        generate = panel.get_by_role("button", name="generate JWT", exact=True)
+        expect(generate).to_be_visible()
+        expect(generate).to_be_disabled()
         expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
         page.get_by_role("button", name="Sign out", exact=True).click()
         expect(page.get_by_label("Password", exact=True)).to_be_visible()

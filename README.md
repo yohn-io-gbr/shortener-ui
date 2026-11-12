@@ -33,7 +33,7 @@ cp secrets.toml.example .streamlit/secrets.toml
 1. `python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt -r requirements-dev.txt`
 2. `pytest`
 3. `streamlit run app.py`
-4. Open the **Auth** tab. Paste a staging Cognito **access** JWT for a member of `stage-test-simple`. An ID token is the wrong token. The token stays in the browser session and is not saved.
+4. Open the **Auth** tab. Paste a staging Cognito **access** JWT or generate one using Cognito sign-in for a member of the configured tenant. An ID token is the wrong token. The token stays in the browser session and is not saved.
 5. Health and ready both show 200.
 6. List links. Create one link on a domain the tenant already owns, using a disposable slug. Confirm 201, `Location`, and `ETag`.
 7. Change the destination with `If-Match`. Confirm the revision increases.
@@ -44,9 +44,43 @@ cp secrets.toml.example .streamlit/secrets.toml
 
 `pytest` does not open a socket and does not call the live Worker. The checklist above is the live check. Do not call `POST /api/v1/analytics/disable` except from the Emergency stop control, after confirming it.
 
+## Generate an access JWT
+
+On **Auth**, enter the Tenant id for API requests. Under **Cognito sign-in**, fill:
+
+| Field | Required |
+| --- | --- |
+| AWS region | Yes; must match the user pool ID |
+| User pool ID | Yes |
+| App client ID | Yes; the client must permit `USER_SRP_AUTH` |
+| Email / username | Yes |
+| Cognito password | Yes |
+| App client secret (optional) | Only for an app client configured with a secret |
+
+Select **generate JWT**. The button is disabled until the required fields are
+filled. A successful sign-in automatically fills the existing masked **Access JWT**
+field and updates the missing-JWT warnings across tabs. It clears cached links,
+drafts, responses, and idempotency keys from the previous API identity while
+preserving the console login, Tenant id, Base URL, and non-secret Cognito settings.
+You can still paste an access token manually.
+
+If Cognito requests SMS, authenticator, or email OTP MFA, enter the **MFA code**
+that appears and select **generate JWT** again. This completes the existing sign-in
+session rather than starting another password login. **Cancel Cognito sign-in**
+discards the pending challenge. Password-change/setup and other account challenges
+must be completed separately before signing in here.
+
+Typing in the form does not contact Cognito. Requests happen only when the button
+is pressed; they never create or modify Worker resources. Passwords, client-secret
+inputs, and MFA codes are cleared after every attempt. A client secret needed to
+complete an MFA challenge remains only in the current server-side browser session
+until completion, cancellation, Clear session, or sign-out. Tokens are not logged,
+saved to files, or added to Streamlit secrets. Account details are never prefilled
+from the local test credentials.
+
 ## Tests
 
-The suite currently collects **60 tests: 47 unit/UI workflow tests and 13 Chromium browser
+The suite currently collects **84 tests: 71 unit/UI workflow tests and 13 Chromium browser
 cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 
 ### Coverage
@@ -56,9 +90,11 @@ cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 | `tests/test_auth.py` | 2 | Missing console credentials, wrong password, successful sign-in, six tabs, sign-out | None |
 | `tests/test_client.py` | 17 | Token cleanup, auth/tenant headers, health/readiness headers, redirects, idempotency and retries, revisions, pagination, date validation, recorded stats and analytics responses, URL/path validation, credential comparison, unpublished Worker origin | None; HTTP is mocked |
 | `tests/test_console_flows.py` | 28 | Credential clearing and blocked requests; session isolation; input errors; filters/pagination; Lookup and loaded details; totals, daily/empty stats, permissions and CSV contents; health/readiness success UI | None; synthetic credentials and strictly mocked HTTP |
+| `tests/test_cognito_auth.py` | 16 | SRP/session handling, access-token selection, configuration validation, MFA codes and secret hashes, safe provider/network errors, unsupported/incomplete responses | None; SDK calls are stubbed |
+| `tests/test_cognito_form.py` | 8 | Required-field gating, masked inputs, no login while typing, automatic JWT fill, cache reset, safe failure, MFA completion/retry/cancel and session clearing | None; Cognito sign-in is mocked |
 | `e2e/test_availability.py` | 1 | `http://localhost:8501/` returns HTTP 200 and shows the console heading | Local app only |
 | `e2e/test_browser_auth.py` | 1 | Rejects a wrong password, accepts temporary test credentials, shows all six tabs, signs out | Isolated local app only |
-| `e2e/test_local_auth.py`: console and navigation | 2 | Local secrets sign-in/sign-out; clicks Auth, Session, Links, Recorded stats, Sampled analytics, Members and verifies selected tabs and visible panels | Local app only |
+| `e2e/test_local_auth.py`: console and navigation | 2 | Local secrets sign-in/sign-out; Cognito form fields visible/enabled, sensitive fields masked, generate JWT disabled when incomplete; clicks all six tabs and verifies selected tabs and visible panels | Local app only |
 | `e2e/test_local_auth.py`: Links controls | 1 | Lookup, Loaded link, Create headings; visible, enabled Lookup button | Local app only |
 | `e2e/test_local_auth.py`: Session | 1 | Clicks Check health, then Check ready; expects HTTP 200 with `{"status":"ok"}` and `{"status":"ready"}` respectively | Worker `/health` and `/ready` |
 | `e2e/test_local_auth.py`: Recorded stats | 2 | All eight controls visible/enabled; warning visible without a JWT and hidden after Auth is filled | Local app; JWT case also calls Cognito |
@@ -106,6 +142,9 @@ rejects any HTTP request not explicitly mocked.
 
 ```sh
 pytest tests/test_console_flows.py
+
+# Cognito login helper and Auth form, with no external requests.
+pytest tests/test_cognito_auth.py tests/test_cognito_form.py
 ```
 
 Clearing credentials now resets cached links, selected records, drafts, filters,
@@ -203,16 +242,16 @@ attempts both requests even if health returns an error.
 
 ### Results, limits, and artifacts
 
-Latest PR #1 P1/P2 validation (2026-11-12): **47 unit/mocked UI tests passed**,
-the independent synthetic browser test passed, and **8 local-only browser cases
-passed** (including the synthetic case). A temporary count-only audit confirmed
-zero credential loads and zero Cognito login attempts in the local-only run.
-The **4 authenticated cases failed before their JWT-dependent assertions** because
-the Cognito endpoint was unreachable; the audit confirmed one credential load and
-one shared login attempt across all four. Their live JWT-dependent behavior,
-including the two authenticated date-control cases, remains unverified in this run.
-The remaining health/readiness case failed with Worker connection errors. All 60
-cases still collect successfully; no test cases were removed.
+Latest Auth-form validation (2026-11-12): **71 unit/mocked UI tests passed** and
+**8 local-only browser cases passed** (including the synthetic case). The 24 new
+mocked tests cover the Cognito helper and form, including automatic token filling,
+MFA, safe failures, and secret/session cleanup. The **4 existing authenticated
+cases failed before their JWT-dependent assertions** because the Cognito endpoint
+was unreachable. Their live JWT-dependent behavior remains unverified in this run.
+The remaining health/readiness case failed with Worker connection errors. All 84
+cases still collect successfully; no test cases were removed. The earlier P1/P2
+audit confirmed no Cognito access for local-only tests and one shared login attempt
+for the four authenticated cases.
 
 A successful browser UI check confirms visibility, enabled state, or warning
 behavior; it does not establish that a statistics or analytics API request succeeds.
@@ -254,7 +293,7 @@ The source is [yohn-io-gbr/shortener-ui](https://github.com/yohn-io-gbr/shortene
 
 ## Deployment
 
-The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/](https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/). Opening that URL redirects to Streamlit sign-in. The console then asks for `AUTH_USERNAME` and `AUTH_PASSWORD`. API calls still require an access JWT pasted on the Auth tab. Do not store the JWT as a secret.
+The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/](https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/). Opening that URL redirects to Streamlit sign-in. The console then asks for `AUTH_USERNAME` and `AUTH_PASSWORD`. API calls still require an access JWT pasted or generated on the Auth tab. Do not store the JWT as a secret.
 
 1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io) with the GitHub account that can see `yohn-io-gbr/shortener-ui`.
 2. Deploy branch `main` and main file `app.py`. Python is 3.12.
@@ -263,4 +302,4 @@ The published app is [https://shortener-ui-nmaetmpwczhcpzxghdo2sa.streamlit.app/
 
 ## Out of scope
 
-Cognito login in the app UI, Worker or CORS changes, production deploys, polling, charts, domain onboarding, and a public demo with a built-in token.
+Worker or CORS changes, production deploys, polling, charts, domain onboarding, and a public demo with a built-in token.

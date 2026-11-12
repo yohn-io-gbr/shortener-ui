@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 import streamlit as st
 
+from cognito_auth import CognitoAuthError, complete_mfa, start_login
 from client import (
     CallResult,
     ClientError,
@@ -72,7 +73,7 @@ def require_basic_auth() -> bool:
         st.error("Set AUTH_USERNAME and AUTH_PASSWORD in Streamlit secrets before using this app.")
         return False
     st.subheader("Sign in")
-    st.caption("This password only opens the console. The access JWT is still entered on the Auth tab.")
+    st.caption("This password only opens the console. Paste or generate an access JWT on the Auth tab.")
     username = st.text_input("Username", key="basic_username")
     password = st.text_input("Password", type="password", key="basic_password")
     if st.button("Sign in"):
@@ -410,6 +411,77 @@ def render_auth() -> None:
     else:
         st.warning("A value is stored, but it does not look like a JWT. Use the access token, not the ID token.")
     st.button("Clear access JWT", on_click=clear_session)
+    render_cognito_sign_in()
+
+
+def cancel_cognito_sign_in() -> None:
+    for key in ("cognito_challenge", "cognito_notice", "cognito_error"):
+        st.session_state.pop(key, None)
+    for key in ("cognito_password", "cognito_client_secret", "cognito_mfa_code"):
+        st.session_state[key] = ""
+
+
+def generate_cognito_jwt() -> None:
+    st.session_state.pop("cognito_error", None)
+    st.session_state.pop("cognito_notice", None)
+    try:
+        challenge = st.session_state.get("cognito_challenge")
+        if challenge:
+            result = complete_mfa(challenge, st.session_state.get("cognito_mfa_code", ""))
+        else:
+            result = start_login(
+                region=st.session_state.get("cognito_region", ""),
+                pool_id=st.session_state.get("cognito_user_pool_id", ""),
+                client_id=st.session_state.get("cognito_client_id", ""),
+                username=st.session_state.get("cognito_username", ""),
+                password=st.session_state.get("cognito_password", ""),
+                client_secret=st.session_state.get("cognito_client_secret", ""),
+            )
+    except CognitoAuthError as error:
+        st.session_state.cognito_error = str(error)
+        return
+    finally:
+        # Callbacks run before widgets are instantiated on the next rerun.
+        for key in ("cognito_password", "cognito_client_secret", "cognito_mfa_code"):
+            st.session_state[key] = ""
+    if result.challenge:
+        st.session_state.cognito_challenge = result.challenge
+        st.session_state.cognito_notice = "Enter your MFA code, then select generate JWT to finish signing in."
+        return
+    preserved = {
+        key: st.session_state[key] for key in (
+            "tenant_id", "base_url", "allow_other_origin", "cognito_region",
+            "cognito_user_pool_id", "cognito_client_id", "cognito_username",
+        ) if key in st.session_state
+    }
+    clear_session()
+    st.session_state.update(preserved)
+    st.session_state.access_token = result.access_token
+    st.session_state.cognito_notice = "Access JWT generated and filled for this browser session."
+
+
+def render_cognito_sign_in() -> None:
+    with st.expander("Cognito sign-in", expanded=True):
+        st.caption("Enter your Cognito account details to generate an access JWT. Passwords and codes are cleared after each attempt.")
+        pending = st.session_state.get("cognito_challenge") is not None
+        region = st.text_input("AWS region", key="cognito_region", disabled=pending)
+        pool = st.text_input("User pool ID", key="cognito_user_pool_id", disabled=pending)
+        client = st.text_input("App client ID", key="cognito_client_id", disabled=pending)
+        username = st.text_input("Email / username", key="cognito_username", disabled=pending)
+        password = st.text_input("Cognito password", type="password", key="cognito_password", disabled=pending)
+        st.text_input("App client secret (optional)", type="password", key="cognito_client_secret", disabled=pending)
+        if pending:
+            code = st.text_input("MFA code", type="password", key="cognito_mfa_code")
+            ready = bool(code.strip())
+        else:
+            ready = all(value.strip() for value in (region, pool, client, username)) and bool(password)
+        st.button("generate JWT", disabled=not ready, on_click=generate_cognito_jwt)
+        if pending:
+            st.button("Cancel Cognito sign-in", on_click=cancel_cognito_sign_in)
+        if st.session_state.get("cognito_error"):
+            st.error(st.session_state.cognito_error)
+        if st.session_state.get("cognito_notice"):
+            st.info(st.session_state.cognito_notice)
 
 
 def render_session() -> None:
