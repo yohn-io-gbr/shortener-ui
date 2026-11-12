@@ -46,7 +46,7 @@ cp secrets.toml.example .streamlit/secrets.toml
 
 ## Tests
 
-The suite currently collects **32 tests: 19 unit tests and 13 Chromium browser
+The suite currently collects **60 tests: 47 unit/UI workflow tests and 13 Chromium browser
 cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 
 ### Coverage
@@ -55,6 +55,7 @@ cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 | --- | ---: | --- | --- |
 | `tests/test_auth.py` | 2 | Missing console credentials, wrong password, successful sign-in, six tabs, sign-out | None |
 | `tests/test_client.py` | 17 | Token cleanup, auth/tenant headers, health/readiness headers, redirects, idempotency and retries, revisions, pagination, date validation, recorded stats and analytics responses, URL/path validation, credential comparison, unpublished Worker origin | None; HTTP is mocked |
+| `tests/test_console_flows.py` | 28 | Credential clearing and blocked requests; session isolation; input errors; filters/pagination; Lookup and loaded details; totals, daily/empty stats, permissions and CSV contents; health/readiness success UI | None; synthetic credentials and strictly mocked HTTP |
 | `e2e/test_availability.py` | 1 | `http://localhost:8501/` returns HTTP 200 and shows the console heading | Local app only |
 | `e2e/test_browser_auth.py` | 1 | Rejects a wrong password, accepts temporary test credentials, shows all six tabs, signs out | Isolated local app only |
 | `e2e/test_local_auth.py`: console and navigation | 2 | Local secrets sign-in/sign-out; clicks Auth, Session, Links, Recorded stats, Sampled analytics, Members and verifies selected tabs and visible panels | Local app only |
@@ -67,7 +68,9 @@ cases**. Plain `pytest` runs only the unit tests; browser tests are opt-in.
 
 Recorded stats controls: **start**, **end**, **Link id**, **Tenant stats**,
 **Download tenant CSV**, **Use selected link**, **Link stats**, **Download link CSV**.
-The tests do not click the statistics buttons or fetch statistics/CSV data.
+The browser tests do not click the statistics buttons or fetch statistics/CSV data.
+The mocked UI workflow tests exercise those buttons and verify returned data and
+the exact CSV payload, filename, and MIME type passed to the download control.
 
 Sampled analytics checks **analytics start**, **analytics end**, **Scope**
 (**tenant** / **link**), **Country**, **Referrer**, **Confirm analytics disable**,
@@ -81,7 +84,34 @@ Members checks **issuer**, **subject**, **role** (**editor** / **viewer**), and
 JWT. The warning `Paste the access JWT on the Auth tab before adding a member.`
 must appear initially and disappear after a JWT is set. Both cases check the
 tenant-admin guidance and default editor role. They never click Add member or
-send a member-creation request; these UI checks do not verify admin permissions.
+send a member-creation request; these browser UI checks do not verify admin permissions.
+Mocked validation tests click Add member with invalid input and verify that no
+HTTP request is sent. Credential-clearing tests also verify that valid-looking
+member input cannot send a request after the JWT is removed.
+
+### Additional workflow checks
+
+`tests/test_console_flows.py` covers six areas without a running server, real
+credentials, or external requests. Streamlit AppTest drives the actual UI; respx
+rejects any HTTP request not explicitly mocked.
+
+| Area | Checks |
+| --- | --- |
+| API response handling | Mocked health/readiness render their successful JSON bodies; filtered List returns and displays the mocked page. Live health/readiness/List checks remain in the browser suite. |
+| Clear JWT/session | Both Clear access JWT and Clear session restore all missing-JWT warnings, clear cached data/drafts/idempotency keys, and prevent List, stats, analytics, and member requests. Console sign-in remains active. |
+| Session isolation | Sign-out removes cached links, selection, responses, tokens, and drafts before another operator signs in. Independent app sessions do not share loaded data. |
+| Input validation | Reversed, zero-length, and over-366-day stats ranges; missing Link id; missing/invalid issuer and invalid subject. Each displays an error and sends no request. |
+| Links | Filter parameters, next-page cursor, disabled pagination at the end, cursor reset after filter changes, exact case-sensitive Lookup, not-found response, loaded link/ETag, stats link selection, and revision-mismatch warning. |
+| Recorded results and CSV | Tenant/link totals and exact daily rows, empty results, tenant permission errors, CSV format/Accept headers, exact download contents and filenames. |
+
+```sh
+pytest tests/test_console_flows.py
+```
+
+Clearing credentials now resets cached links, selected records, drafts, filters,
+and idempotency keys as well as tokens and responses. Signing out resets all
+session state. Successful List/Next page requests rerender immediately so the
+pagination buttons reflect the newly returned cursor.
 
 ### Setup and local secrets
 
@@ -108,9 +138,20 @@ cognito_client_id = "your-cognito-app-client-id"
 # mfa_code = "current-code-only-if-Cognito-requests-MFA"
 ```
 
-Cognito login uses `USER_SRP_AUTH`. SMS, authenticator, and email MFA challenges use
-the optional current `mfa_code`; remove it after use. A new login may require a new
-code. Account-setup challenges such as a forced password change are not handled.
+Cognito login uses `USER_SRP_AUTH`. A lazily requested, session-scoped `cognito_auth`
+fixture loads local credentials and generates one access JWT shared by the four
+authenticated cases in a pytest process. Local-only cases never request the fixture
+or contact Cognito. Each test still uses a separate browser context, and the shared
+credentials/token remain in memory without recording authenticated browser artifacts.
+SMS, authenticator, and email MFA challenges use the optional current `mfa_code`;
+one MFA challenge may still be required per pytest session. Remove the code after
+use. Starting a new pytest process (or another parallel worker) performs a new login;
+an unusually long run may outlive the shared token. Account-setup challenges such
+as a forced password change are not handled.
+
+Date-control checks target Streamlit's `stDateInput` widgets and their visible,
+enabled `spinbutton` segments. Both date-widget counts and start/end labels are
+checked without depending on locale-specific date formatting.
 
 Except for the isolated authentication test, browser tests expect an app already
 running at `http://localhost:8501/`. Start it in one terminal:
@@ -129,6 +170,9 @@ synthetic credentials and no Worker origin; it does not use local secrets.
 ```sh
 # Unit tests only; no browser or external HTTP requests.
 pytest
+
+# Mocked UI workflows for the six additional areas.
+pytest tests/test_console_flows.py
 
 # Isolated browser authentication test; no running app required.
 pytest e2e/test_browser_auth.py --browser chromium
@@ -159,10 +203,22 @@ attempts both requests even if health returns an error.
 
 ### Results, limits, and artifacts
 
-A successful UI check confirms visibility, enabled state, or warning behavior;
-it does not establish that a statistics or analytics API request succeeds.
-Lookup is not submitted, links are not created/updated/deleted, CSV downloads are
-not exercised, and members are not created.
+Latest PR #1 P1/P2 validation (2026-11-12): **47 unit/mocked UI tests passed**,
+the independent synthetic browser test passed, and **8 local-only browser cases
+passed** (including the synthetic case). A temporary count-only audit confirmed
+zero credential loads and zero Cognito login attempts in the local-only run.
+The **4 authenticated cases failed before their JWT-dependent assertions** because
+the Cognito endpoint was unreachable; the audit confirmed one credential load and
+one shared login attempt across all four. Their live JWT-dependent behavior,
+including the two authenticated date-control cases, remains unverified in this run.
+The remaining health/readiness case failed with Worker connection errors. All 60
+cases still collect successfully; no test cases were removed.
+
+A successful browser UI check confirms visibility, enabled state, or warning
+behavior; it does not establish that a statistics or analytics API request succeeds.
+The mocked UI workflows verify response rendering, Lookup, and CSV download data
+without contacting the Worker. Saving CSV files through an actual browser is not
+covered. No tests create/update/delete real links, add real members, or disable analytics.
 
 Health/readiness and List are live response checks. They fail on DNS/connection
 errors, unexpected status codes, or unexpected health/readiness bodies. They do

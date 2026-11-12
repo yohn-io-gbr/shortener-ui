@@ -84,10 +84,7 @@ def require_basic_auth() -> bool:
 
 
 def sign_out() -> None:
-    st.session_state.basic_auth_ok = False
-    st.session_state.basic_password = ""
-    st.session_state.access_token = ""
-    st.session_state.results = {}
+    st.session_state.clear()
 
 
 def configured_origin() -> str | None:
@@ -118,8 +115,9 @@ def secret_base_url() -> str | None:
 
 
 def clear_session() -> None:
-    st.session_state.access_token = ""
-    st.session_state.results = {}
+    authenticated = st.session_state.get("basic_auth_ok") is True
+    st.session_state.clear()
+    st.session_state.basic_auth_ok = authenticated
 
 
 def make_client() -> ShortenerClient:
@@ -376,7 +374,7 @@ def render_sidebar() -> None:
         st.sidebar.warning("Paste the access JWT on the Auth tab.")
     st.sidebar.button("Sign out", on_click=sign_out)
     st.sidebar.button("Clear session", on_click=clear_session)
-    st.sidebar.caption("Clear session deletes the access JWT and the last API responses.")
+    st.sidebar.caption("Clear session deletes the access JWT, cached links, drafts, and API responses.")
     try:
         validate_base_url(
             st.session_state.base_url,
@@ -476,7 +474,9 @@ def render_links() -> None:
             apply_list_page(result, filters)
             return result
 
-        run("list_links", action)
+        listed_now = run("list_links", action)
+        if isinstance(listed_now, CallResult) and listed_now.status_code == 200:
+            st.rerun()
     elif next_clicked and draft == st.session_state.links["filters"] and next_cursor:
         filters = dict(st.session_state.links["filters"])
 
@@ -493,7 +493,9 @@ def render_links() -> None:
             apply_list_page(result, filters)
             return result
 
-        run("list_links", action)
+        listed_now = run("list_links", action)
+        if isinstance(listed_now, CallResult) and listed_now.status_code == 200:
+            st.rerun()
     listed = st.session_state.results.get("list_links")
     if isinstance(listed, CallResult):
         if not show_status(listed):

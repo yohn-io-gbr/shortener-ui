@@ -264,15 +264,27 @@ def _generate_access_jwt(settings: dict[str, str]) -> str:
         ) from None
 
 
+@pytest.fixture(scope="session")
+def cognito_auth():
+    """Obtain one in-memory access JWT, only when a test requests this fixture."""
+    settings = _local_access_credentials()
+    token = _generate_access_jwt(settings)
+    return settings, token
+
+
 def _expect_recorded_stats_controls(page: Page) -> None:
     panel = page.get_by_role("tabpanel")
-    dates = panel.locator('input[type="date"]')
+    dates = panel.get_by_test_id("stDateInput")
     expect(dates).to_have_count(2)
     for index, name in enumerate(("start", "end")):
         expect(panel.get_by_text(name, exact=True)).to_be_visible()
-        field = dates.nth(index)
-        expect(field).to_be_visible()
-        expect(field).to_be_enabled()
+        widget = dates.nth(index)
+        expect(widget).to_be_visible()
+        segments = widget.get_by_role("spinbutton")
+        expect(segments).not_to_have_count(0)
+        for segment in segments.all():
+            expect(segment).to_be_visible()
+            expect(segment).to_be_enabled()
     link_id = panel.get_by_label("Link id", exact=True).and_(page.locator("input"))
     expect(link_id).to_be_visible()
     expect(link_id).to_be_enabled()
@@ -307,9 +319,10 @@ def test_recorded_stats_controls_are_available(browser: Browser):
 
 
 @pytest.mark.e2e
-def test_recorded_stats_controls_and_warning_with_generated_access_jwt(browser: Browser):
-    settings = _local_access_credentials()
-    token = _generate_access_jwt(settings)
+def test_recorded_stats_controls_and_warning_with_generated_access_jwt(
+    browser: Browser, request: pytest.FixtureRequest
+):
+    settings, token = request.getfixturevalue("cognito_auth")
     stage = "console sign-in"
     try:
         with browser.new_context() as context:
@@ -357,12 +370,17 @@ def _expect_sampled_analytics_controls(page: Page) -> None:
     country = panel.get_by_role("button", name="Country", exact=True)
     if not country.is_visible():
         reads.click()
-    dates = panel.locator('input[type="date"]')
+    dates = panel.get_by_test_id("stDateInput")
     expect(dates).to_have_count(2)
     for index, name in enumerate(("analytics start", "analytics end")):
         expect(panel.get_by_text(name, exact=True)).to_be_visible()
-        expect(dates.nth(index)).to_be_visible()
-        expect(dates.nth(index)).to_be_enabled()
+        widget = dates.nth(index)
+        expect(widget).to_be_visible()
+        segments = widget.get_by_role("spinbutton")
+        expect(segments).not_to_have_count(0)
+        for segment in segments.all():
+            expect(segment).to_be_visible()
+            expect(segment).to_be_enabled()
     expect(panel.get_by_text("Scope", exact=True)).to_be_visible()
     for name in ("tenant", "link"):
         radio = panel.get_by_role("radio", name=name, exact=True)
@@ -388,9 +406,10 @@ def _expect_sampled_analytics_controls(page: Page) -> None:
 
 @pytest.mark.e2e
 @pytest.mark.parametrize("with_jwt", [False, True], ids=["no_token", "generated_access_jwt"])
-def test_sampled_analytics_controls_and_warning(browser: Browser, with_jwt: bool):
-    settings = _local_access_credentials() if with_jwt else None
-    token = _generate_access_jwt(settings) if with_jwt else None
+def test_sampled_analytics_controls_and_warning(
+    browser: Browser, with_jwt: bool, request: pytest.FixtureRequest
+):
+    settings, token = request.getfixturevalue("cognito_auth") if with_jwt else (None, None)
     stage = "console sign-in"
     try:
         with browser.new_context() as context:
@@ -434,9 +453,10 @@ def test_sampled_analytics_controls_and_warning(browser: Browser, with_jwt: bool
 
 @pytest.mark.e2e
 @pytest.mark.parametrize("with_jwt", [False, True], ids=["no_token", "generated_access_jwt"])
-def test_members_controls_and_warning(browser: Browser, with_jwt: bool):
-    settings = _local_access_credentials() if with_jwt else None
-    token = _generate_access_jwt(settings) if with_jwt else None
+def test_members_controls_and_warning(
+    browser: Browser, with_jwt: bool, request: pytest.FixtureRequest
+):
+    settings, token = request.getfixturevalue("cognito_auth") if with_jwt else (None, None)
     stage = "console sign-in"
     try:
         with browser.new_context() as context:
@@ -499,9 +519,10 @@ def _expect_members_controls(page: Page) -> None:
 
 
 @pytest.mark.e2e
-def test_auth_tab_accepts_tenant_and_generated_access_jwt(browser: Browser):
-    settings = _local_access_credentials()
-    token = _generate_access_jwt(settings)
+def test_auth_tab_accepts_tenant_and_generated_access_jwt(
+    browser: Browser, request: pytest.FixtureRequest
+):
+    settings, token = request.getfixturevalue("cognito_auth")
     stage = "console sign-in"
     try:
         # Never record real credentials or issued tokens in plugin artifacts.
