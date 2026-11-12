@@ -6,7 +6,12 @@ APP = Path(__file__).resolve().parents[1] / "app.py"
 
 
 def _app() -> AppTest:
-    return AppTest.from_file(str(APP))
+    app = AppTest.from_file(str(APP))
+    # Unit tests must not inherit the developer's local console credentials.
+    app.secrets["AUTH_USERNAME"] = ""
+    app.secrets["AUTH_PASSWORD"] = ""
+    app.secrets["SHORTENER_BASE_URL"] = ""
+    return app
 
 
 def test_console_stays_closed_without_basic_auth_secrets():
