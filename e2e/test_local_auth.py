@@ -101,6 +101,29 @@ def test_all_console_tabs_can_be_clicked_after_login(browser: Browser):
 
 
 @pytest.mark.e2e
+def test_links_sections_and_lookup_button_are_available(browser: Browser):
+    try:
+        with browser.new_context() as context:
+            page = context.new_page()
+            _sign_in(page)
+            links = page.get_by_role("tab", name="Links", exact=True)
+            links.click()
+            expect(links).to_have_attribute("aria-selected", "true")
+            panel = page.get_by_role("tabpanel")
+            for name in ("Lookup", "Loaded link", "Create"):
+                expect(panel.get_by_role("heading", name=name, exact=True)).to_be_visible()
+            lookup = panel.get_by_role("button", name="Lookup", exact=True)
+            expect(lookup).to_be_visible()
+            expect(lookup).to_be_enabled()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_label("Password", exact=True)).to_be_visible()
+    except (AssertionError, Error):
+        raise pytest.fail.Exception(
+            "Links Lookup, Loaded link, Create, or enabled Lookup button was not available", pytrace=False
+        ) from None
+
+
+@pytest.mark.e2e
 def test_session_check_health_and_check_ready(browser: Browser):
     stage = "console sign-in"
     try:
@@ -241,6 +264,240 @@ def _generate_access_jwt(settings: dict[str, str]) -> str:
         ) from None
 
 
+def _expect_recorded_stats_controls(page: Page) -> None:
+    panel = page.get_by_role("tabpanel")
+    dates = panel.locator('input[type="date"]')
+    expect(dates).to_have_count(2)
+    for index, name in enumerate(("start", "end")):
+        expect(panel.get_by_text(name, exact=True)).to_be_visible()
+        field = dates.nth(index)
+        expect(field).to_be_visible()
+        expect(field).to_be_enabled()
+    link_id = panel.get_by_label("Link id", exact=True).and_(page.locator("input"))
+    expect(link_id).to_be_visible()
+    expect(link_id).to_be_enabled()
+    for name in (
+        "Tenant stats", "Download tenant CSV", "Use selected link",
+        "Link stats", "Download link CSV",
+    ):
+        button = panel.get_by_role("button", name=name, exact=True)
+        expect(button).to_be_visible()
+        expect(button).to_be_enabled()
+
+
+@pytest.mark.e2e
+def test_recorded_stats_controls_are_available(browser: Browser):
+    try:
+        with browser.new_context() as context:
+            page = context.new_page()
+            _sign_in(page)
+            stats = page.get_by_role("tab", name="Recorded stats", exact=True)
+            stats.click()
+            expect(stats).to_have_attribute("aria-selected", "true")
+            _expect_recorded_stats_controls(page)
+            expect(page.get_by_text(
+                "Paste the access JWT on the Auth tab before loading stats.", exact=True
+            )).to_be_visible()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_label("Password", exact=True)).to_be_visible()
+    except (AssertionError, Error):
+        raise pytest.fail.Exception(
+            "Recorded stats controls or initial missing-JWT warning were not available", pytrace=False
+        ) from None
+
+
+@pytest.mark.e2e
+def test_recorded_stats_controls_and_warning_with_generated_access_jwt(browser: Browser):
+    settings = _local_access_credentials()
+    token = _generate_access_jwt(settings)
+    stage = "console sign-in"
+    try:
+        with browser.new_context() as context:
+            page = context.new_page()
+            socket = _sign_in(page)
+            stage = "Recorded stats warning before access JWT"
+            stats = page.get_by_role("tab", name="Recorded stats", exact=True)
+            stats.click()
+            warning = page.get_by_text(
+                "Paste the access JWT on the Auth tab before loading stats.", exact=True
+            )
+            expect(warning).to_be_visible()
+
+            stage = "Auth fields"
+            page.get_by_role("tab", name="Auth", exact=True).click()
+            tenant = page.get_by_label("Tenant id", exact=True)
+            tenant.fill(settings["tenant_id"])
+            with socket.expect_event("framereceived", predicate=_script_finished):
+                tenant.press("Enter")
+            jwt = page.get_by_label("Access JWT", exact=True).and_(page.locator("input"))
+            jwt.fill(token)
+            with socket.expect_event("framereceived", predicate=_script_finished):
+                jwt.press("Enter")
+            expect(jwt).to_have_value(token)
+
+            stage = "Recorded stats warning after access JWT"
+            stats.click()
+            expect(stats).to_have_attribute("aria-selected", "true")
+            expect(warning).to_be_hidden()
+            stage = "Recorded stats controls after access JWT"
+            _expect_recorded_stats_controls(page)
+            stage = "sign-out"
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_label("Password", exact=True)).to_be_visible()
+    except (AssertionError, Error):
+        raise pytest.fail.Exception(
+            f"Recorded stats test failed at {stage}", pytrace=False
+        ) from None
+
+
+def _expect_sampled_analytics_controls(page: Page) -> None:
+    panel = page.get_by_role("tabpanel")
+    reads = panel.get_by_text("Sampled analytics reads", exact=True)
+    expect(reads).to_be_visible()
+    country = panel.get_by_role("button", name="Country", exact=True)
+    if not country.is_visible():
+        reads.click()
+    dates = panel.locator('input[type="date"]')
+    expect(dates).to_have_count(2)
+    for index, name in enumerate(("analytics start", "analytics end")):
+        expect(panel.get_by_text(name, exact=True)).to_be_visible()
+        expect(dates.nth(index)).to_be_visible()
+        expect(dates.nth(index)).to_be_enabled()
+    expect(panel.get_by_text("Scope", exact=True)).to_be_visible()
+    for name in ("tenant", "link"):
+        radio = panel.get_by_role("radio", name=name, exact=True)
+        expect(radio).to_be_visible()
+        expect(radio).to_be_enabled()
+    for name in ("Country", "Referrer"):
+        button = panel.get_by_role("button", name=name, exact=True)
+        expect(button).to_be_visible()
+        expect(button).to_be_enabled()
+
+    emergency = panel.get_by_text("Emergency stop", exact=True)
+    expect(emergency).to_be_visible()
+    disable = panel.get_by_role("button", name="Disable analytics", exact=True)
+    if not disable.is_visible():
+        emergency.click()
+    confirm = panel.get_by_role("checkbox", name="Confirm analytics disable", exact=True)
+    expect(confirm).to_be_visible()
+    expect(confirm).to_be_enabled()
+    expect(confirm).not_to_be_checked()
+    expect(disable).to_be_visible()
+    expect(disable).to_be_disabled()
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("with_jwt", [False, True], ids=["no_token", "generated_access_jwt"])
+def test_sampled_analytics_controls_and_warning(browser: Browser, with_jwt: bool):
+    settings = _local_access_credentials() if with_jwt else None
+    token = _generate_access_jwt(settings) if with_jwt else None
+    stage = "console sign-in"
+    try:
+        with browser.new_context() as context:
+            page = context.new_page()
+            socket = _sign_in(page)
+            tab = page.get_by_role("tab", name="Sampled analytics", exact=True)
+            tab.click()
+            expect(tab).to_have_attribute("aria-selected", "true")
+            warning = page.get_by_text(
+                "Paste the access JWT on the Auth tab. Opening this tab does not call the API.",
+                exact=True,
+            )
+            stage = "initial warning and controls"
+            expect(warning).to_be_visible()
+            _expect_sampled_analytics_controls(page)
+            if with_jwt:
+                stage = "Auth fields"
+                page.get_by_role("tab", name="Auth", exact=True).click()
+                tenant = page.get_by_label("Tenant id", exact=True)
+                tenant.fill(settings["tenant_id"])
+                with socket.expect_event("framereceived", predicate=_script_finished):
+                    tenant.press("Enter")
+                jwt = page.get_by_label("Access JWT", exact=True).and_(page.locator("input"))
+                jwt.fill(token)
+                with socket.expect_event("framereceived", predicate=_script_finished):
+                    jwt.press("Enter")
+                expect(jwt).to_have_value(token)
+                stage = "warning and controls after access JWT"
+                tab.click()
+                expect(tab).to_have_attribute("aria-selected", "true")
+                expect(warning).to_be_hidden()
+                _expect_sampled_analytics_controls(page)
+            stage = "sign-out"
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_label("Password", exact=True)).to_be_visible()
+    except (AssertionError, Error):
+        raise pytest.fail.Exception(
+            f"Sampled analytics test failed at {stage}", pytrace=False
+        ) from None
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("with_jwt", [False, True], ids=["no_token", "generated_access_jwt"])
+def test_members_controls_and_warning(browser: Browser, with_jwt: bool):
+    settings = _local_access_credentials() if with_jwt else None
+    token = _generate_access_jwt(settings) if with_jwt else None
+    stage = "console sign-in"
+    try:
+        with browser.new_context() as context:
+            page = context.new_page()
+            socket = _sign_in(page)
+            tab = page.get_by_role("tab", name="Members", exact=True)
+            tab.click()
+            expect(tab).to_have_attribute("aria-selected", "true")
+            warning = page.get_by_text(
+                "Paste the access JWT on the Auth tab before adding a member.", exact=True
+            )
+            stage = "initial warning and controls"
+            expect(warning).to_be_visible()
+            _expect_members_controls(page)
+            if with_jwt:
+                stage = "Auth fields"
+                page.get_by_role("tab", name="Auth", exact=True).click()
+                tenant = page.get_by_label("Tenant id", exact=True)
+                tenant.fill(settings["tenant_id"])
+                with socket.expect_event("framereceived", predicate=_script_finished):
+                    tenant.press("Enter")
+                jwt = page.get_by_label("Access JWT", exact=True).and_(page.locator("input"))
+                jwt.fill(token)
+                with socket.expect_event("framereceived", predicate=_script_finished):
+                    jwt.press("Enter")
+                expect(jwt).to_have_value(token)
+                stage = "warning and controls after access JWT"
+                tab.click()
+                expect(tab).to_have_attribute("aria-selected", "true")
+                expect(warning).to_be_hidden()
+                _expect_members_controls(page)
+            stage = "sign-out"
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_label("Password", exact=True)).to_be_visible()
+    except (AssertionError, Error):
+        raise pytest.fail.Exception(
+            f"Members test failed at {stage}", pytrace=False
+        ) from None
+
+
+def _expect_members_controls(page: Page) -> None:
+    panel = page.get_by_role("tabpanel")
+    expect(panel.get_by_text(
+        "Tenant admin only. This does not create a Cognito user. "
+        "Type the existing subject and the exact issuer.", exact=True
+    )).to_be_visible()
+    for name in ("issuer", "subject"):
+        field = panel.get_by_label(name, exact=True).and_(page.locator("input"))
+        expect(field).to_be_visible()
+        expect(field).to_be_enabled()
+    expect(panel.get_by_text("role", exact=True)).to_be_visible()
+    for name in ("editor", "viewer"):
+        radio = panel.get_by_role("radio", name=name, exact=True)
+        expect(radio).to_be_visible()
+        expect(radio).to_be_enabled()
+    expect(panel.get_by_role("radio", name="editor", exact=True)).to_be_checked()
+    button = panel.get_by_role("button", name="Add member", exact=True)
+    expect(button).to_be_visible()
+    expect(button).to_be_enabled()
+
+
 @pytest.mark.e2e
 def test_auth_tab_accepts_tenant_and_generated_access_jwt(browser: Browser):
     settings = _local_access_credentials()
@@ -251,6 +508,12 @@ def test_auth_tab_accepts_tenant_and_generated_access_jwt(browser: Browser):
         with browser.new_context() as context:
             page = context.new_page()
             socket = _sign_in(page)
+            stage = "Links warning before access JWT"
+            page.get_by_role("tab", name="Links", exact=True).click()
+            links_warning = page.get_by_text(
+                "Paste the access JWT on the Auth tab before listing links.", exact=True
+            )
+            expect(links_warning).to_be_visible()
             page.get_by_role("tab", name="Auth", exact=True).click()
             stage = "initial missing-token warning"
             warning = page.get_by_text(
@@ -275,6 +538,28 @@ def test_auth_tab_accepts_tenant_and_generated_access_jwt(browser: Browser):
             expect(page.get_by_text(
                 "Access JWT is stored for this browser session.", exact=True
             )).to_be_visible()
+            stage = "Links warning and List controls after access JWT"
+            links = page.get_by_role("tab", name="Links", exact=True)
+            links.click()
+            expect(links).to_have_attribute("aria-selected", "true")
+            panel = page.get_by_role("tabpanel")
+            expect(links_warning).to_be_hidden()
+            expect(panel.get_by_role("heading", name="List", exact=True)).to_be_visible()
+            list_button = panel.get_by_role("button", name="List", exact=True)
+            expect(list_button).to_be_visible()
+            expect(list_button).to_be_enabled()
+            stage = "List response"
+            list_button.click()
+            expect(panel.get_by_text("GET /api/v1/links", exact=True)).to_be_visible(timeout=30000)
+            status = panel.get_by_text(re.compile(
+                r"^(HTTP \d{3}|Transport failure \((?:connection|timeout|header)\)\.)$"
+            ))
+            expect(status).to_be_visible(timeout=30000)
+            if status.inner_text() != "HTTP 200":
+                raise pytest.fail.Exception(
+                    f"List failed: {status.inner_text()}", pytrace=False
+                ) from None
+            expect(panel.get_by_text("HTTP 200", exact=True)).to_be_visible()
             stage = "sign-out"
             page.get_by_role("button", name="Sign out", exact=True).click()
             expect(page.get_by_label("Password", exact=True)).to_be_visible()
